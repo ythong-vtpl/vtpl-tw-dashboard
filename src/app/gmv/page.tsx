@@ -1,10 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TrendingUp, ShoppingCart, AlertTriangle, DollarSign } from 'lucide-react';
 
 interface GmvSummary {
+  country: string;
+  currency: string;
+  currencySymbol: string;
   month: string;
   daysTracked: number;
   totalOrders: number;
@@ -21,17 +25,30 @@ interface GmvSummary {
   dailyData: any[];
 }
 
-function formatTWD(amount: number): string {
-  return `TWD ${amount.toLocaleString()}`;
-}
+const COUNTRY_LABELS: Record<string, { label: string; flag: string }> = {
+  TW: { label: '대만', flag: '🇹🇼' },
+  HK: { label: '홍콩', flag: '🇭🇰' },
+};
 
 export default function GmvPage() {
+  const searchParams = useSearchParams();
+  const country = searchParams.get('country') || 'TW';
+  const countryInfo = COUNTRY_LABELS[country] || COUNTRY_LABELS.TW;
+
   const [summary, setSummary] = useState<GmvSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const formatAmount = (amount: number) => {
+    const sym = summary?.currencySymbol || 'NT$';
+    return `${sym}${amount.toLocaleString()}`;
+  };
+
   useEffect(() => {
-    fetch('/api/gmv/summary')
+    setLoading(true);
+    setError(null);
+    setSummary(null);
+    fetch(`/api/gmv/summary?country=${country}`)
       .then(res => res.json())
       .then(data => {
         if (data.error) setError(data.error);
@@ -39,7 +56,7 @@ export default function GmvPage() {
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [country]);
 
   if (loading) {
     return (
@@ -67,7 +84,7 @@ export default function GmvPage() {
 
   return (
     <div className="max-w-5xl">
-      <h2 className="text-2xl font-bold mb-2">GMV</h2>
+      <h2 className="text-2xl font-bold mb-2">{countryInfo.flag} {countryInfo.label} GMV</h2>
       <p className="text-gray-500 mb-6">{summary.month} ({summary.daysTracked}일 추적 중)</p>
 
       {/* 상단 요약 카드 */}
@@ -78,7 +95,7 @@ export default function GmvPage() {
               <DollarSign className="w-4 h-4 text-green-600" />
               <span className="text-xs text-gray-500">이번 달 실 GMV</span>
             </div>
-            <p className="text-xl font-bold">{formatTWD(summary.realGmv)}</p>
+            <p className="text-xl font-bold">{formatAmount(summary.realGmv)}</p>
           </CardContent>
         </Card>
 
@@ -98,20 +115,22 @@ export default function GmvPage() {
               <TrendingUp className="w-4 h-4 text-purple-600" />
               <span className="text-xs text-gray-500">총 주문 금액</span>
             </div>
-            <p className="text-xl font-bold">{formatTWD(summary.totalAmount)}</p>
+            <p className="text-xl font-bold">{formatAmount(summary.totalAmount)}</p>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <AlertTriangle className="w-4 h-4 text-orange-500" />
-              <span className="text-xs text-gray-500">CVS 미수령</span>
-            </div>
-            <p className="text-xl font-bold">{summary.cvsUnpaidCount}건</p>
-            <p className="text-xs text-gray-400">{formatTWD(summary.cvsUnpaidAmount)}</p>
-          </CardContent>
-        </Card>
+        {country === 'TW' && (
+          <Card>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle className="w-4 h-4 text-orange-500" />
+                <span className="text-xs text-gray-500">CVS 미수령</span>
+              </div>
+              <p className="text-xl font-bold">{summary.cvsUnpaidCount}건</p>
+              <p className="text-xs text-gray-400">{formatAmount(summary.cvsUnpaidAmount)}</p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* 어제 요약 */}
@@ -127,11 +146,11 @@ export default function GmvPage() {
                 <p className="text-xs text-gray-500">주문</p>
               </div>
               <div>
-                <p className="text-2xl font-bold">{formatTWD(summary.yesterday.amount)}</p>
+                <p className="text-2xl font-bold">{formatAmount(summary.yesterday.amount)}</p>
                 <p className="text-xs text-gray-500">주문 금액</p>
               </div>
               <div>
-                <p className="text-2xl font-bold text-green-600">{formatTWD(summary.yesterday.realGmv)}</p>
+                <p className="text-2xl font-bold text-green-600">{formatAmount(summary.yesterday.realGmv)}</p>
                 <p className="text-xs text-gray-500">실 GMV</p>
               </div>
             </div>
@@ -162,12 +181,12 @@ export default function GmvPage() {
                     <tr key={i} className="border-b last:border-0">
                       <td className="py-1.5 pr-4">{d.date}</td>
                       <td className="py-1.5 pr-4 text-right">{d.total_order_count}</td>
-                      <td className="py-1.5 pr-4 text-right">{formatTWD(d.total_order_amount || 0)}</td>
+                      <td className="py-1.5 pr-4 text-right">{formatAmount(d.total_order_amount || 0)}</td>
                       <td className="py-1.5 pr-4 text-right text-green-600 font-medium">
-                        {formatTWD((d.regular_order_amount || 0) + (d.cvs_paid_amount || 0))}
+                        {formatAmount((d.regular_order_amount || 0) + (d.cvs_paid_amount || 0))}
                       </td>
                       <td className="py-1.5 pr-4 text-right text-orange-500">
-                        {d.cvs_unpaid_count > 0 ? `${d.cvs_unpaid_count}건 (${formatTWD(d.cvs_unpaid_amount || 0)})` : '-'}
+                        {d.cvs_unpaid_count > 0 ? `${d.cvs_unpaid_count}건 (${formatAmount(d.cvs_unpaid_amount || 0)})` : '-'}
                       </td>
                     </tr>
                   ))}

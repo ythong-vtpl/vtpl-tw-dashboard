@@ -1,10 +1,24 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getGmvSupabase } from '@/lib/supabase';
+import { Country, getShoplineToken, SHOPLINE_API_BASE, COUNTRY_CONFIG } from '@/lib/config';
+import axios from 'axios';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const country = (request.nextUrl.searchParams.get('country') as Country) || 'TW';
+
+  if (country === 'TW') {
+    return getTwGmvSummary();
+  } else if (country === 'HK') {
+    return getHkGmvSummary();
+  }
+
+  return NextResponse.json({ error: `지원하지 않는 국가: ${country}` }, { status: 400 });
+}
+
+/** 대만 GMV — Supabase daily_gmv 테이블에서 조회 */
+async function getTwGmvSummary() {
   const sb = getGmvSupabase();
 
-  // 이번 달 데이터
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -24,17 +38,18 @@ export async function GET() {
 
   const days = dailyData || [];
 
-  // 집계
   const totalOrders = days.reduce((s: number, d: any) => s + (d.total_order_count || 0), 0);
   const totalAmount = days.reduce((s: number, d: any) => s + (d.total_order_amount || 0), 0);
   const realGmv = days.reduce((s: number, d: any) => s + (d.regular_order_amount || 0) + (d.cvs_paid_amount || 0), 0);
   const cvsUnpaidCount = days.reduce((s: number, d: any) => s + (d.cvs_unpaid_count || 0), 0);
   const cvsUnpaidAmount = days.reduce((s: number, d: any) => s + (d.cvs_unpaid_amount || 0), 0);
 
-  // 어제 데이터
   const yesterday = days.length > 0 ? days[days.length - 1] : null;
 
   return NextResponse.json({
+    country: 'TW',
+    currency: 'TWD',
+    currencySymbol: 'NT$',
     month: `${year}-${month}`,
     daysTracked: days.length,
     totalOrders,
@@ -50,4 +65,107 @@ export async function GET() {
     } : null,
     dailyData: days,
   });
+}
+
+/** 홍콩 GMV — Shopline API에서 직접 주문 조회 */
+async function getHkGmvSummary() {
+  const token = getShoplineToken('HK');
+  if (!token) {
+    return NextResponse.json({ error: '홍콩 Shopline 토큰이 설정되지 않았습니다.' }, { status: 500 });
+  }
+
+  const config = COUNTRY_CONFIG.HK;
+
+  try {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const firstDay = `${year}-${month}-01`;
+
+    // Shopline API에서 이번 달 주문 조회
+    const client = axios.create({
+      baseURL: SHOPLINE_API_BASE,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+
+    const allOrders: any[] = [];
+    let page = 1;
+
+    while (true) {
+      const res = await client.get('/v1/orders', { params: { per_page: 250, page } });
+      const orders = res.data?.items || [];
+      if (orders.length === 0) break;
+
+      for (const o of orders) {
+        const orderDate = o.created_at?.split('T')[0];
+        if (orderDate && orderDate < firstDay) {
+          // 이번 달 이전 주문이면 중단
+          page = 999; // break outer
+          break;
+        }
+        if (o.status !== 'cancelled') {
+          allOrders.push(o);
+        }
+      }
+
+      if (page >= 999 || orders.length < 250) break;
+      page++;
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    // 일별 집계
+    const dailyMap = new Map<string, { orders: number; amount: number }>();
+
+    for (const o of allOrders) {
+      const date = o.created_at?.split('T')[0];
+      if (!date) continue;
+
+      const amount = o.total?.dollars || 0;
+      const existing = dailyMap.get(date) || { orders: 0, amount: 0 };
+      existing.orders += 1;
+      existing.amount += amount;
+      dailyMap.set(date, existing);
+    }
+
+    const dailyData = Array.from(dailyMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, d]) => ({
+        date,
+        total_order_count: d.orders,
+        total_order_amount: d.amount,
+        // 홍콩은 CVS 없음
+        regular_order_amount: d.amount,
+        cvs_paid_amount: 0,
+        cvs_unpaid_count: 0,
+        cvs_unpaid_amount: 0,
+      }));
+
+    const totalOrders = allOrders.length;
+    const totalAmount = allOrders.reduce((s, o) => s + (o.total?.dollars || 0), 0);
+
+    const yesterday = dailyData.length > 0 ? dailyData[dailyData.length - 1] : null;
+
+    return NextResponse.json({
+      country: 'HK',
+      currency: 'HKD',
+      currencySymbol: 'HK$',
+      month: `${year}-${month}`,
+      daysTracked: dailyData.length,
+      totalOrders,
+      totalAmount,
+      realGmv: totalAmount, // 홍콩은 CVS 없으므로 전액 실 GMV
+      cvsUnpaidCount: 0,
+      cvsUnpaidAmount: 0,
+      yesterday: yesterday ? {
+        date: yesterday.date,
+        orders: yesterday.total_order_count,
+        amount: yesterday.total_order_amount,
+        realGmv: yesterday.total_order_amount,
+      } : null,
+      dailyData,
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
 }
