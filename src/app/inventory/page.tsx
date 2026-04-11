@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -33,12 +34,22 @@ interface AllocateResult {
   executionTimeMs: number;
 }
 
+const COUNTRY_LABELS: Record<string, { label: string; flag: string }> = {
+  TW: { label: '대만', flag: '🇹🇼' },
+  HK: { label: '홍콩', flag: '🇭🇰' },
+};
+
 export default function InventoryPage() {
+  const searchParams = useSearchParams();
+  const country = searchParams.get('country') || 'TW';
+  const countryInfo = COUNTRY_LABELS[country] || COUNTRY_LABELS.TW;
+  const showShopee = country === 'TW';
+
   const [files, setFiles] = useState<FileSlot[]>([
     { key: 'optionInfo', label: 'option-info', description: '옵션별 재고', file: null },
     { key: 'setSku', label: 'Set-SKU', description: '세트 구성', file: null },
     { key: 'downSku', label: 'Down-SKU-SkuDetails', description: 'SKU 상세', file: null },
-    { key: 'shopeeTemplate', label: 'Shopee 템플릿', description: 'Sales Info (선택)', file: null },
+    ...(showShopee ? [{ key: 'shopeeTemplate', label: 'Shopee 템플릿', description: 'Sales Info (선택)', file: null }] : []),
   ]);
 
   const [loading, setLoading] = useState(false);
@@ -73,6 +84,7 @@ export default function InventoryPage() {
       formData.append('downSku', files[2].file!);
       if (files[3].file) formData.append('shopeeTemplate', files[3].file!);
       formData.append('dryRun', String(dryRun));
+      formData.append('country', country);
 
       const res = await fetch('/api/inventory/allocate', {
         method: 'POST',
@@ -101,7 +113,7 @@ export default function InventoryPage() {
 
   return (
     <div className="max-w-5xl">
-      <h2 className="text-2xl font-bold mb-6">재고 배분</h2>
+      <h2 className="text-2xl font-bold mb-6">{countryInfo.flag} {countryInfo.label} 재고 배분</h2>
 
       {/* 파일 업로드 */}
       <div className="grid grid-cols-2 gap-4 mb-6">

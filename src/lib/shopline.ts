@@ -1,12 +1,13 @@
 import axios, { AxiosInstance } from 'axios';
 import { ShoplineProduct } from './types/inventory';
-import { SHOPLINE_API_BASE, SHOPLINE_RATE_LIMIT_MS } from './config';
+import { SHOPLINE_API_BASE, SHOPLINE_RATE_LIMIT_MS, Country, getShoplineToken } from './config';
 
-function createClient(): AxiosInstance {
+function createClient(country: Country = 'TW'): AxiosInstance {
+  const token = getShoplineToken(country);
   return axios.create({
     baseURL: SHOPLINE_API_BASE,
     headers: {
-      Authorization: `Bearer ${process.env.SHOPLINE_TW_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     timeout: 30000,
@@ -16,8 +17,8 @@ function createClient(): AxiosInstance {
 /**
  * Fetch all Shopline products (active + hidden)
  */
-export async function fetchShoplineProducts(): Promise<ShoplineProduct[]> {
-  const client = createClient();
+export async function fetchShoplineProducts(country: Country = 'TW'): Promise<ShoplineProduct[]> {
+  const client = createClient(country);
   const allProducts: ShoplineProduct[] = [];
   const statusesToFetch = ['active', 'hidden'];
 
@@ -66,9 +67,10 @@ export async function fetchShoplineProducts(): Promise<ShoplineProduct[]> {
 export async function updateShoplineVariation(
   productId: string,
   variationId: string,
-  quantity: number
+  quantity: number,
+  country: Country = 'TW'
 ): Promise<{ success: boolean; error?: string }> {
-  const client = createClient();
+  const client = createClient(country);
   try {
     await client.put(`/v1/products/${productId}/variations/${variationId}`, {
       quantity,

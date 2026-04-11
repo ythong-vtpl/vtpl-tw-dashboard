@@ -5,14 +5,11 @@ import { calculateAllocation } from '@/lib/allocation';
 import { loadPromos, getActivePromos } from '@/lib/promo';
 import { fetchShoplineProducts, updateShoplineVariation } from '@/lib/shopline';
 import { generateShopeeUpdateExcel } from '@/lib/shopee-export';
-import { getInventorySupabase } from '@/lib/supabase';
-import { SHOPLINE_RATE_LIMIT_MS } from '@/lib/config';
-import { AllocationResult, UpdateSummary, UpdateDetail, UpdateError } from '@/lib/types/inventory';
+import { SHOPLINE_RATE_LIMIT_MS, Country, COUNTRY_CONFIG } from '@/lib/config';
+import { UpdateSummary, UpdateDetail, UpdateError } from '@/lib/types/inventory';
 
-// Vercel 서버리스 함수 타임아웃 설정 (60초)
 export const maxDuration = 60;
 
-// 생성된 쇼피 엑셀을 임시 저장 (메모리, 5분 TTL)
 const shopeeExcelStore = new Map<string, { buffer: Buffer; createdAt: number }>();
 
 function cleanExpiredExcels() {
@@ -28,6 +25,13 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
 
+    // 국가 파라미터
+    const country = (formData.get('country') as Country) || 'TW';
+    const countryConfig = COUNTRY_CONFIG[country];
+    if (!countryConfig) {
+      return NextResponse.json({ error: `지원하지 않는 국가: ${country}` }, { status: 400 });
+    }
+
     // 파일 추출
     const optionInfoFile = formData.get('optionInfo') as File | null;
     const setSkuFile = formData.get('setSku') as File | null;
@@ -42,7 +46,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Buffer 변환
     const optionInfoBuffer = Buffer.from(await optionInfoFile.arrayBuffer());
     const setSkuBuffer = Buffer.from(await setSkuFile.arrayBuffer());
     const downSkuBuffer = Buffer.from(await downSkuFile.arrayBuffer());
@@ -50,17 +53,20 @@ export async function POST(request: NextRequest) {
     // Step 1: 엑셀 파싱
     const warehouseData = await parseWarehouseExcel(optionInfoBuffer, setSkuBuffer, downSkuBuffer);
 
-    // Step 2: 프로모션 로드
-    const allPromos = await loadPromos();
-    const activePromos = getActivePromos(allPromos);
+    // Step 2: 프로모션 로드 (TW만 구글시트 프로모션 지원)
+    let activePromos: any[] = [];
+    if (country === 'TW') {
+      const allPromos = await loadPromos();
+      activePromos = getActivePromos(allPromos);
+    }
 
-    // Step 3: Shopline 상품 조회
-    const shoplineProducts = await fetchShoplineProducts();
+    // Step 3: Shopline 상품 조회 (국가별 토큰 사용)
+    const shoplineProducts = await fetchShoplineProducts(country);
 
     // Step 4: SKU 매칭
     const matchResult = matchSkus(warehouseData, shoplineProducts);
 
-    // Step 5: 배분 계산
+    // Step 5: 배분 계산 (국가별 비율 적용)
     const allocations = calculateAllocation(warehouseData, matchResult.matched, activePromos);
 
     // Step 6: Shopline 재고 업데이트
@@ -78,7 +84,8 @@ export async function POST(request: NextRequest) {
         const result = await updateShoplineVariation(
           alloc.shoplineProductId,
           alloc.shoplineVariationId,
-          alloc.shoplineAllocation
+          alloc.shoplineAllocation,
+          country
         );
 
         if (result.success) {
@@ -100,7 +107,6 @@ export async function POST(request: NextRequest) {
         await new Promise(r => setTimeout(r, SHOPLINE_RATE_LIMIT_MS));
       }
     } else {
-      // DRY RUN: 변경될 항목만 기록
       for (const alloc of allocations) {
         if (alloc.shoplineAllocation !== alloc.currentShoplineStock) {
           updates.push({
@@ -117,20 +123,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 7: 쇼피 엑셀 생성
+    // Step 7: 쇼피 엑셀 생성 (TW만)
     let shopeeResult = null;
-    let downloadId: string | null = null;
-
-    if (shopeeTemplateFile) {
+    if (shopeeTemplateFile && country === 'TW') {
       const templateBuffer = Buffer.from(await shopeeTemplateFile.arrayBuffer());
       const result = await generateShopeeUpdateExcel(allocations, templateBuffer);
 
-      downloadId = `shopee_${Date.now()}`;
+      const downloadId = `shopee_${Date.now()}`;
       cleanExpiredExcels();
-      shopeeExcelStore.set(downloadId, {
-        buffer: result.buffer,
-        createdAt: Date.now(),
-      });
+      shopeeExcelStore.set(downloadId, { buffer: result.buffer, createdAt: Date.now() });
 
       shopeeResult = {
         matched: result.matched,
@@ -140,7 +141,7 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // Step 8: Supabase 스냅샷 저장 (public 스키마)
+    // Step 8: Supabase 스냅샷
     try {
       const { createClient } = await import('@supabase/supabase-js');
       const sb = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -150,6 +151,7 @@ export async function POST(request: NextRequest) {
         snapshot_date: today,
         seller_code: a.sellerCode,
         product_name: a.productName,
+        country,
         is_set_product: a.isSetProduct,
         warehouse_available_stock: a.warehouseAvailableStock,
         shopline_allocation: a.shoplineAllocation,
@@ -165,8 +167,8 @@ export async function POST(request: NextRequest) {
         onConflict: 'snapshot_date,seller_code',
       });
 
-      // 실행 로그
       await sb.from('allocation_runs').insert({
+        country,
         dry_run: dryRun,
         total_skus_processed: allocations.length,
         total_skus_updated: updates.length,
@@ -195,6 +197,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      country,
       dryRun,
       summary,
       shopee: shopeeResult,
@@ -211,5 +214,4 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// 쇼피 엑셀 다운로드용 (downloadId로 조회)
 export { shopeeExcelStore };
