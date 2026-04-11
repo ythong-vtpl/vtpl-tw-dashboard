@@ -140,9 +140,10 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // Step 8: Supabase 스냅샷 저장
+    // Step 8: Supabase 스냅샷 저장 (public 스키마)
     try {
-      const sb = getInventorySupabase();
+      const { createClient } = await import('@supabase/supabase-js');
+      const sb = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
       const today = new Date().toISOString().split('T')[0];
 
       const snapshotRows = allocations.map(a => ({
@@ -160,7 +161,7 @@ export async function POST(request: NextRequest) {
         promo_note: a.promoNote || null,
       }));
 
-      await sb.from('daily_snapshots').upsert(snapshotRows, {
+      await sb.from('inventory_snapshots').upsert(snapshotRows, {
         onConflict: 'snapshot_date,seller_code',
       });
 
