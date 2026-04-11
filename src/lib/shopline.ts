@@ -47,6 +47,7 @@ export async function fetchShoplineProducts(country: Country = 'TW'): Promise<Sh
           _id: product._id || product.id,
           title: product.title_translations?.['zh-hant'] || product.title || '',
           handle: product.handle || '',
+          unlimited_quantity: product.unlimited_quantity || false,
           status: product.status || status,
           variations,
         });

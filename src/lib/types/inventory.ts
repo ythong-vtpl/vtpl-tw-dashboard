@@ -43,6 +43,7 @@ export interface ShoplineProduct {
   _id: string;
   title: string;
   handle: string;
+  unlimited_quantity?: boolean;
   status: string;
   variations: ShoplineVariation[];
 }
