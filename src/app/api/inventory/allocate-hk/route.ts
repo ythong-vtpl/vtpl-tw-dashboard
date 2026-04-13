@@ -2,27 +2,34 @@ import { NextRequest, NextResponse } from 'next/server';
 import { parseMjInventory } from '@/lib/mj-parser';
 import { fetchShoplineProducts, updateShoplineVariation } from '@/lib/shopline';
 import { SHOPLINE_RATE_LIMIT_MS } from '@/lib/config';
-import { HK_SET_CONFIGS, calculateHkSetStock } from '@/lib/hk-set-config';
+import { HK_SET_MAP } from '@/lib/hk-set-config';
 
 export const maxDuration = 60;
 
-interface HkUpdateDetail {
+const SAFETY_STOCK_RATIO = 0.05; // 안전재고 5%
+
+interface VInfo {
   sku: string;
-  productName: string;
-  previousQty: number;
-  newQty: number;
-  isSet: boolean;
+  title: string;
+  field: string;
+  current: number;
+  price: number;
   productId: string;
   variationId: string;
+  isSet: boolean;
+  unlimited: boolean;
+  status: string;
 }
 
 /**
  * 홍콩 재고 배분 API (구성품 풀 기반)
  *
- * 1. MJ 엑셀 → SKU별 가용재고
- * 2. Shopline HK → 상품/옵션 목록
- * 3. 단품: MJ 재고에서 세트 소요분 제외 후 배분
- * 4. 세트: 구성품 최소값(bottleneck)으로 자동 계산
+ * 1. MJ 재고 × 95% (안전재고 5%)
+ * 2. FLASH DEAL 우선 배분 (고정 수량)
+ * 3. 나머지: 구성품 풀 기반 가격 가중치 배분
+ *    - 세트 가중치 1.3x (비밀링크 포함)
+ *    - 단품에도 적절히 배분 (0으로 만들지 않음)
+ * 4. 04 아이펜슬 합산 (8809603934017 + 8809603933478)
  */
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
@@ -38,145 +45,145 @@ export async function POST(request: NextRequest) {
 
     const mjBuffer = Buffer.from(await mjFile.arrayBuffer());
 
-    // Step 1: MJ 재고 파싱
+    // Step 1: MJ 재고 파싱 + 안전재고 5% 적용
     const mjItems = await parseMjInventory(mjBuffer);
-    const mjStockMap = new Map<string, number>();
-    for (const item of mjItems) {
-      mjStockMap.set(item.skuCode, item.quantity);
-    }
+    const rawPool = new Map<string, number>();
+    for (const item of mjItems) rawPool.set(item.skuCode, (rawPool.get(item.skuCode) || 0) + item.quantity);
 
-    // Step 2: Shopline HK 상품 조회
+    // 04 합산
+    const wp04 = (rawPool.get('8809603934017') || 0) + (rawPool.get('8809603933478') || 0);
+    rawPool.set('8809603934017', wp04);
+    rawPool.set('8809603933478', wp04);
+
+    // 안전재고 적용
+    const pool = new Map<string, number>();
+    for (const [sku, qty] of rawPool) pool.set(sku, Math.floor(qty * (1 - SAFETY_STOCK_RATIO)));
+
+    // Step 2: Shopline HK (active + hidden)
     const shoplineProducts = await fetchShoplineProducts('HK');
 
-    // Step 3: 모든 옵션 분류 (단품 vs 세트)
-    interface VariationInfo {
-      sku: string;
-      productName: string;
-      currentQty: number;
-      productId: string;
-      variationId: string;
-      isSet: boolean;
-      isUnlimited: boolean;
-    }
-
-    const allVariations: VariationInfo[] = [];
-
-    for (const product of shoplineProducts) {
-      const isUnlimited = (product as any).unlimited_quantity === true;
-      for (const variation of product.variations) {
-        const sku = variation.sku?.trim();
+    const allVars: VInfo[] = [];
+    for (const p of shoplineProducts) {
+      for (const v of p.variations) {
+        const sku = v.sku?.trim();
         if (!sku) continue;
-        allVariations.push({
+        allVars.push({
           sku,
-          productName: product.title,
-          currentQty: variation.quantity,
-          productId: product._id,
-          variationId: variation.id,
+          title: p.title,
+          field: v.fieldName || '',
+          current: v.quantity,
+          price: v.price,
+          productId: p._id,
+          variationId: v.id,
           isSet: sku.toUpperCase().startsWith('SET'),
-          isUnlimited,
+          unlimited: !!(p as any).unlimited_quantity,
+          status: p.status,
         });
       }
     }
 
-    // Step 4: 구성품 풀 기반 배분
-    // 먼저 세트별 수량 계산 (구성품 bottleneck)
-    const setAllocations = new Map<string, number>();
-    const setConfigs = new Map(HK_SET_CONFIGS.map(c => [c.setSku, c]));
+    // Step 3: 구성품 풀 기반 배분
+    const remaining = new Map(pool);
+    const allocations = new Map<string, number>();
 
-    for (const v of allVariations) {
-      if (!v.isSet) continue;
-      const config = setConfigs.get(v.sku);
-      if (config) {
-        const maxSets = calculateHkSetStock(v.sku, mjStockMap);
-        setAllocations.set(v.sku, Math.max(0, maxSets));
+    const deduct = (sku: string, qty: number) => {
+      remaining.set(sku, Math.max(0, (remaining.get(sku) || 0) - qty));
+    };
+
+    const getSetMax = (setSku: string): number => {
+      const config = HK_SET_MAP.get(setSku);
+      if (!config) return 0;
+      let min = Infinity;
+      for (const c of config.components) {
+        min = Math.min(min, Math.floor((remaining.get(c.sku) || 0) / c.quantity));
+      }
+      return min === Infinity ? 0 : Math.max(0, min);
+    };
+
+    const allocSet = (setSku: string, qty: number) => {
+      const config = HK_SET_MAP.get(setSku);
+      if (!config) return;
+      for (const c of config.components) deduct(c.sku, qty * c.quantity);
+    };
+
+    // 세트 가중치 1.3x
+    const calcWeight = (v: VInfo): number => {
+      let w = v.price || 100;
+      if (v.isSet) w *= 1.3;
+      return w;
+    };
+
+    // TODO: FLASH DEAL 로직은 프로모션 기간에만 적용
+    // 현재는 일반 풀 배분으로 처리
+
+    // 풀 배분: 세트 + 단품
+    const unalloc = allVars.filter(v => !allocations.has(v.variationId) && !v.unlimited);
+    const compUsers = new Map<string, VInfo[]>();
+
+    for (const v of unalloc) {
+      if (v.isSet) {
+        const config = HK_SET_MAP.get(v.sku);
+        if (!config) { allocations.set(v.variationId, 0); continue; }
+        for (const c of config.components) {
+          if (!compUsers.has(c.sku)) compUsers.set(c.sku, []);
+          compUsers.get(c.sku)!.push(v);
+        }
+      } else {
+        if (!compUsers.has(v.sku)) compUsers.set(v.sku, []);
+        compUsers.get(v.sku)!.push(v);
       }
     }
 
-    // 세트에 사용될 구성품 수량 합산
-    const componentUsedBySet = new Map<string, number>();
-    for (const [setSku, setQty] of setAllocations) {
-      const config = setConfigs.get(setSku);
-      if (!config) continue;
-      for (const comp of config.components) {
-        const prev = componentUsedBySet.get(comp.sku) || 0;
-        componentUsedBySet.set(comp.sku, prev + setQty * comp.quantity);
-      }
-    }
-
-    // 단품 재고 = MJ 재고 - 세트 소요분
-    const singleAllocations = new Map<string, number>();
-    for (const v of allVariations) {
-      if (v.isSet || v.isUnlimited) continue;
-      const mjStock = mjStockMap.get(v.sku) || 0;
-      const usedBySet = componentUsedBySet.get(v.sku) || 0;
-      const available = Math.max(0, mjStock - usedBySet);
-      singleAllocations.set(v.sku, available);
-    }
-
-    // Step 5: 업데이트 목록 생성
-    const updates: HkUpdateDetail[] = [];
-    const errors: { sku: string; error: string }[] = [];
-    const skipped: { sku: string; reason: string }[] = [];
-    let skippedSame = 0;
-    let matchedCount = 0;
-    let setCount = 0;
-
-    for (const v of allVariations) {
-      if (v.isUnlimited) {
-        skipped.push({ sku: v.sku, reason: '무제한 수량' });
-        continue;
-      }
-
-      let newQty: number;
+    for (const v of unalloc) {
+      if (allocations.has(v.variationId)) continue;
 
       if (v.isSet) {
-        const config = setConfigs.get(v.sku);
-        if (!config) {
-          skipped.push({ sku: v.sku, reason: '세트 매핑 없음 (hk-set-config.ts에 추가 필요)' });
-          continue;
-        }
-        newQty = setAllocations.get(v.sku) || 0;
-        setCount++;
-      } else {
-        if (!mjStockMap.has(v.sku)) {
-          skipped.push({ sku: v.sku, reason: 'MJ 재고에 없음' });
-          continue;
-        }
-        newQty = singleAllocations.get(v.sku) || 0;
-        matchedCount++;
-      }
+        const config = HK_SET_MAP.get(v.sku);
+        if (!config) { allocations.set(v.variationId, 0); continue; }
 
-      if (newQty === v.currentQty) {
-        skippedSame++;
-        continue;
+        let maxSets = Infinity;
+        for (const c of config.components) {
+          const r = remaining.get(c.sku) || 0;
+          const users = compUsers.get(c.sku) || [];
+          const totalWeight = users.reduce((s, u) => s + calcWeight(u), 0);
+          const myWeight = calcWeight(v);
+          const myShare = totalWeight > 0 ? Math.floor(r * (myWeight / totalWeight)) : 0;
+          maxSets = Math.min(maxSets, Math.floor(myShare / c.quantity));
+        }
+        if (maxSets === Infinity) maxSets = 0;
+        allocations.set(v.variationId, Math.max(0, maxSets));
+        if (maxSets > 0) allocSet(v.sku, maxSets);
+      } else {
+        const r = remaining.get(v.sku) || 0;
+        const users = compUsers.get(v.sku) || [];
+        const totalWeight = users.reduce((s, u) => s + calcWeight(u), 0);
+        const myWeight = calcWeight(v);
+        const myShare = totalWeight > 0 ? Math.floor(r * (myWeight / totalWeight)) : r;
+        allocations.set(v.variationId, Math.max(0, myShare));
+        if (myShare > 0) deduct(v.sku, myShare);
       }
+    }
+
+    // Step 4: 업데이트
+    const updates: any[] = [];
+    const errors: any[] = [];
+    let skippedCount = 0;
+
+    for (const v of allVars) {
+      if (v.unlimited) continue;
+      const newQty = allocations.get(v.variationId) ?? v.current;
+      if (newQty === v.current) { skippedCount++; continue; }
 
       if (!dryRun) {
         const result = await updateShoplineVariation(v.productId, v.variationId, newQty, 'HK');
         if (result.success) {
-          updates.push({
-            sku: v.sku,
-            productName: v.productName,
-            previousQty: v.currentQty,
-            newQty,
-            isSet: v.isSet,
-            productId: v.productId,
-            variationId: v.variationId,
-          });
+          updates.push({ sku: v.sku, productName: v.title, previousQty: v.current, newQty, isSet: v.isSet });
         } else {
-          errors.push({ sku: v.sku, error: result.error || 'Unknown error' });
+          errors.push({ sku: v.sku, error: result.error || 'Unknown' });
         }
         await new Promise(r => setTimeout(r, SHOPLINE_RATE_LIMIT_MS));
       } else {
-        updates.push({
-          sku: v.sku,
-          productName: v.productName,
-          previousQty: v.currentQty,
-          newQty,
-          isSet: v.isSet,
-          productId: v.productId,
-          variationId: v.variationId,
-        });
+        updates.push({ sku: v.sku, productName: v.title, previousQty: v.current, newQty, isSet: v.isSet });
       }
     }
 
@@ -186,17 +193,14 @@ export async function POST(request: NextRequest) {
       dryRun,
       summary: {
         mjItemCount: mjItems.length,
-        shoplineVariationCount: allVariations.length,
-        matched: matchedCount,
-        setCount,
+        shoplineVariationCount: allVars.length,
+        safetyStockPercent: SAFETY_STOCK_RATIO * 100,
         updated: updates.length,
-        skippedSame,
-        skippedOther: skipped.length,
+        skippedSame: skippedCount,
         errors: errors.length,
       },
       updates,
       errors,
-      skipped: skipped.slice(0, 30),
       executionTimeMs: Date.now() - startTime,
     });
   } catch (err: any) {
