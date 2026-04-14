@@ -3,6 +3,8 @@ import { getGmvSupabase } from '@/lib/supabase';
 import { Country, getShoplineToken, SHOPLINE_API_BASE, COUNTRY_CONFIG } from '@/lib/config';
 import axios from 'axios';
 
+export const maxDuration = 60;
+
 export async function GET(request: NextRequest) {
   const country = (request.nextUrl.searchParams.get('country') as Country) || 'TW';
 
@@ -86,20 +88,22 @@ async function getHkGmvSummary() {
     const client = axios.create({
       baseURL: SHOPLINE_API_BASE,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      timeout: 30000,
+      timeout: 45000,
     });
 
     const allOrders: any[] = [];
     let page = 1;
 
-    while (true) {
+    while (page <= 10) { // 안전 제한
       const res = await client.get('/v1/orders', { params: {
         created_at_min: `${firstDay}T00:00:00+08:00`,
         per_page: 250,
         page,
+        sort_by: 'created_at',
+        sort_order: 'desc',
       } });
-      const orders = res.data?.items || [];
-      if (orders.length === 0) break;
+      const orders = res.data?.items || res.data || [];
+      if (!Array.isArray(orders) || orders.length === 0) break;
 
       for (const o of orders) {
         if (o.status !== 'cancelled') {
@@ -109,7 +113,7 @@ async function getHkGmvSummary() {
 
       if (orders.length < 250) break;
       page++;
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 200));
     }
 
     // 일별 집계
@@ -164,6 +168,8 @@ async function getHkGmvSummary() {
       dailyData,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('[HK GMV] Error:', err.response?.data || err.message);
+    const msg = err.response?.data?.error_messages?.[0] || err.message || 'Shopline HK API 오류';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
