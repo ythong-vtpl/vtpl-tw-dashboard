@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { TrendingUp, ShoppingCart, AlertTriangle, DollarSign } from 'lucide-react';
 
@@ -25,15 +24,7 @@ interface GmvSummary {
   dailyData: any[];
 }
 
-const COUNTRY_LABELS: Record<string, { label: string; flag: string }> = {
-  TW: { label: '대만', flag: '🇹🇼' },
-  HK: { label: '홍콩', flag: '🇭🇰' },
-};
-
 export default function GmvPage() {
-  const searchParams = useSearchParams();
-  const country = searchParams.get('country') || 'TW';
-  const countryInfo = COUNTRY_LABELS[country] || COUNTRY_LABELS.TW;
 
   const [summary, setSummary] = useState<GmvSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,7 +39,7 @@ export default function GmvPage() {
     setLoading(true);
     setError(null);
     setSummary(null);
-    fetch(`/api/gmv/summary?country=${country}`)
+    fetch('/api/gmv/summary')
       .then(res => res.json())
       .then(data => {
         if (data.error) setError(data.error);
@@ -56,7 +47,7 @@ export default function GmvPage() {
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
-  }, [country]);
+  }, []);
 
   if (loading) {
     return (
@@ -84,7 +75,7 @@ export default function GmvPage() {
 
   return (
     <div className="max-w-5xl">
-      <h2 className="text-2xl font-bold mb-2">{countryInfo.flag} {countryInfo.label} GMV</h2>
+      <h2 className="text-2xl font-bold mb-2">🇹🇼 대만 GMV</h2>
       <p className="text-gray-500 mb-6">{summary.month} ({summary.daysTracked}일 추적 중)</p>
 
       {/* 상단 요약 카드 */}
@@ -119,18 +110,16 @@ export default function GmvPage() {
           </CardContent>
         </Card>
 
-        {country === 'TW' && (
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <AlertTriangle className="w-4 h-4 text-orange-500" />
-                <span className="text-xs text-gray-500">CVS 미수령</span>
-              </div>
-              <p className="text-xl font-bold">{summary.cvsUnpaidCount}건</p>
-              <p className="text-xs text-gray-400">{formatAmount(summary.cvsUnpaidAmount)}</p>
-            </CardContent>
-          </Card>
-        )}
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle className="w-4 h-4 text-orange-500" />
+              <span className="text-xs text-gray-500">CVS 미수령</span>
+            </div>
+            <p className="text-xl font-bold">{summary.cvsUnpaidCount}건</p>
+            <p className="text-xs text-gray-400">{formatAmount(summary.cvsUnpaidAmount)}</p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* 어제 요약 */}
