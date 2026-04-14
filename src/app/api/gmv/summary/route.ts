@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getGmvSupabase } from '@/lib/supabase';
-import { Country, getShoplineToken, SHOPLINE_API_BASE, COUNTRY_CONFIG } from '@/lib/config';
+import { Country, getShoplineToken, SHOPLINE_API_BASE } from '@/lib/config';
 import axios from 'axios';
 
 export const maxDuration = 60;
@@ -75,8 +75,6 @@ async function getHkGmvSummary() {
   if (!token) {
     return NextResponse.json({ error: '홍콩 Shopline 토큰이 설정되지 않았습니다.' }, { status: 500 });
   }
-
-  const config = COUNTRY_CONFIG.HK;
 
   try {
     const now = new Date();

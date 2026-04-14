@@ -90,16 +90,6 @@ export async function POST(request: NextRequest) {
       remaining.set(sku, Math.max(0, (remaining.get(sku) || 0) - qty));
     };
 
-    const getSetMax = (setSku: string): number => {
-      const config = HK_SET_MAP.get(setSku);
-      if (!config) return 0;
-      let min = Infinity;
-      for (const c of config.components) {
-        min = Math.min(min, Math.floor((remaining.get(c.sku) || 0) / c.quantity));
-      }
-      return min === Infinity ? 0 : Math.max(0, min);
-    };
-
     const allocSet = (setSku: string, qty: number) => {
       const config = HK_SET_MAP.get(setSku);
       if (!config) return;

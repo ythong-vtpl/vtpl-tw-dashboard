@@ -185,62 +185,6 @@ export async function POST(request: NextRequest) {
       console.warn('[Supabase] 스냅샷 저장 실패:', dbErr);
     }
 
-    // Step 9: Shopline 최근 7일 판매 데이터 자동 수집 (비동기, 실패해도 무시)
-    if (!dryRun) {
-      try {
-        const { upsertSalesData } = await import('@/lib/sales-persistence');
-        const { SHOPLINE_API_BASE, SHOPLINE_RATE_LIMIT_MS, getShoplineToken } = await import('@/lib/config');
-        const axios = (await import('axios')).default;
-
-        const token = getShoplineToken(country as any);
-        if (token) {
-          const toDate = new Date().toISOString().slice(0, 10);
-          const fromDate = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-          const client = axios.create({
-            baseURL: SHOPLINE_API_BASE,
-            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-            timeout: 30000,
-          });
-
-          const salesRows: any[] = [];
-          let page = 1;
-          while (page <= 5) { // 최대 5페이지
-            const res = await client.get('/v1/orders', {
-              params: { created_at_min: `${fromDate}T00:00:00+08:00`, created_at_max: `${toDate}T23:59:59+08:00`, per_page: 250, page, status: 'completed,shipped,pending' },
-            });
-            const orders = res.data?.items || res.data || [];
-            if (!Array.isArray(orders) || orders.length === 0) break;
-            for (const order of orders) {
-              const orderId = order._id || order.id || '';
-              const date = (order.created_at || '').slice(0, 10);
-              const items = order.order_items || order.items || [];
-              for (let idx = 0; idx < items.length; idx++) {
-                const item = items[idx];
-                const sku = item.sku || item.variant_sku || '';
-                if (!sku) continue;
-                const price = item.price?.dollars ?? (item.price?.cents ? item.price.cents / 100 : item.price || 0);
-                salesRows.push({
-                  order_id: `${orderId}-${idx}`, order_date: date, channel: 'shopline', sku,
-                  product_name: item.product_name || item.name || '', quantity: item.quantity || 1,
-                  unit_price: price, subtotal: price * (item.quantity || 1),
-                  order_status: order.status || 'completed', country,
-                });
-              }
-            }
-            if (orders.length < 250) break;
-            page++;
-            await new Promise(r => setTimeout(r, SHOPLINE_RATE_LIMIT_MS));
-          }
-          if (salesRows.length > 0) {
-            await upsertSalesData(salesRows);
-            console.log(`[Allocate] Shopline 판매 ${salesRows.length}건 자동 수집 완료`);
-          }
-        }
-      } catch (salesErr) {
-        console.warn('[Allocate] 판매 데이터 자동 수집 실패 (무시):', salesErr);
-      }
-    }
-
     const summary: UpdateSummary = {
       totalSkusProcessed: allocations.length,
       totalSkusUpdated: updates.length,

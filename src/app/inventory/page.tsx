@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Upload, Play, Download, Loader2, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
+import { Upload, Play, Download, Loader2, CheckCircle, XCircle } from 'lucide-react';
 
 interface FileSlot {
   key: string;

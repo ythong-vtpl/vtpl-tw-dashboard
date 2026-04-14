@@ -119,7 +119,7 @@ export default function SalesPage() {
         .then(r => r.json())
         .then(d => setSkuData(Array.isArray(d) ? d : []));
     }
-  }, [topN, rankMode]);
+  }, [topN, rankMode, dateFrom, dateTo, channel, country, hasData, tab]);
 
   // 쇼피 업로드
   const handleShopeeUpload = async () => {

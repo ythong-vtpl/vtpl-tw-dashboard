@@ -5,7 +5,7 @@ import {
 } from './types/inventory';
 import { Promotion, ActivePromoEffect } from './types/promo';
 import { getPromoEffectForSku } from './promo';
-import { CHANNEL_RATIOS, MIN_VARIANT_TYPE_RATIO } from './config';
+import { CHANNEL_RATIOS } from './config';
 
 type Channel = 'shopline' | 'shopee' | 'safety';
 

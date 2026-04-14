@@ -1,6 +1,5 @@
 import {
   Promotion,
-  PromoConfig,
   ActivePromoEffect,
   ChannelRatioOverride,
   PRIORITY_RATIOS,
