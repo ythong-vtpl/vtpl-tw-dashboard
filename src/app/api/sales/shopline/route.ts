@@ -7,14 +7,15 @@ import { SalesDataRow } from '@/lib/types/sales';
 export async function GET(request: NextRequest) {
   const from = request.nextUrl.searchParams.get('from');
   const to = request.nextUrl.searchParams.get('to');
+  const country = (request.nextUrl.searchParams.get('country') || 'TW') as 'TW' | 'HK';
 
   if (!from || !to) {
     return NextResponse.json({ error: 'from, to 파라미터가 필요합니다.' }, { status: 400 });
   }
 
-  const token = getShoplineToken('TW');
+  const token = getShoplineToken(country);
   if (!token) {
-    return NextResponse.json({ error: 'Shopline TW 토큰이 설정되지 않았습니다.' }, { status: 500 });
+    return NextResponse.json({ error: `Shopline ${country} 토큰이 설정되지 않았습니다.` }, { status: 500 });
   }
 
   try {
@@ -85,7 +86,7 @@ export async function GET(request: NextRequest) {
             unit_price: price,
             subtotal,
             order_status: order.status || 'completed',
-            country: 'TW',
+            country,
           });
         }
 

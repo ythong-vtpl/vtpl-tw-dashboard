@@ -93,23 +93,21 @@ async function getHkGmvSummary() {
     let page = 1;
 
     while (true) {
-      const res = await client.get('/v1/orders', { params: { per_page: 250, page } });
+      const res = await client.get('/v1/orders', { params: {
+        created_at_min: `${firstDay}T00:00:00+08:00`,
+        per_page: 250,
+        page,
+      } });
       const orders = res.data?.items || [];
       if (orders.length === 0) break;
 
       for (const o of orders) {
-        const orderDate = o.created_at?.split('T')[0];
-        if (orderDate && orderDate < firstDay) {
-          // 이번 달 이전 주문이면 중단
-          page = 999; // break outer
-          break;
-        }
         if (o.status !== 'cancelled') {
           allOrders.push(o);
         }
       }
 
-      if (page >= 999 || orders.length < 250) break;
+      if (orders.length < 250) break;
       page++;
       await new Promise(r => setTimeout(r, 100));
     }

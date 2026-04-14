@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -17,7 +18,16 @@ import {
 type Channel = 'all' | 'shopee' | 'shopline';
 type Tab = 'daily' | 'monthly' | 'ranking' | 'compare';
 
+const COUNTRY_LABELS: Record<string, { label: string; flag: string; currency: string }> = {
+  TW: { label: '대만', flag: '🇹🇼', currency: 'NT$' },
+  HK: { label: '홍콩', flag: '🇭🇰', currency: 'HK$' },
+};
+
 export default function SalesPage() {
+  const searchParams = useSearchParams();
+  const country = searchParams.get('country') || 'TW';
+  const countryInfo = COUNTRY_LABELS[country] || COUNTRY_LABELS.TW;
+
   // 필터
   const [channel, setChannel] = useState<Channel>('all');
   const [dateFrom, setDateFrom] = useState('');
@@ -45,7 +55,7 @@ export default function SalesPage() {
 
   // 초기 로드: 데이터 범위 확인
   useEffect(() => {
-    fetch('/api/sales/date-range?country=TW')
+    fetch(`/api/sales/date-range?country=${country}`)
       .then(r => r.json())
       .then(data => {
         if (data.hasData && data.minDate && data.maxDate) {
@@ -68,7 +78,7 @@ export default function SalesPage() {
         }
       })
       .catch(() => setHasData(false));
-  }, []);
+  }, [country]);
 
   // 데이터 로드
   const fetchAnalytics = useCallback(async () => {
@@ -76,7 +86,7 @@ export default function SalesPage() {
     setLoading(true);
     setError(null);
 
-    const base = `/api/sales/analytics?from=${dateFrom}&to=${dateTo}&channel=${channel}&country=TW`;
+    const base = `/api/sales/analytics?from=${dateFrom}&to=${dateTo}&channel=${channel}&country=${country}`;
 
     try {
       const [daily, monthly, ranking, compare] = await Promise.all([
@@ -95,16 +105,16 @@ export default function SalesPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, channel, topN, rankMode]);
+  }, [dateFrom, dateTo, channel, country, topN, rankMode]);
 
   useEffect(() => {
     if (dateFrom && dateTo && hasData) fetchAnalytics();
-  }, [dateFrom, dateTo, channel, fetchAnalytics, hasData]);
+  }, [dateFrom, dateTo, channel, country, fetchAnalytics, hasData]);
 
   // 랭킹 모드/N 변경 시 재조회
   useEffect(() => {
     if (dateFrom && dateTo && hasData && tab === 'ranking') {
-      const base = `/api/sales/analytics?from=${dateFrom}&to=${dateTo}&channel=${channel}&country=TW`;
+      const base = `/api/sales/analytics?from=${dateFrom}&to=${dateTo}&channel=${channel}&country=${country}`;
       fetch(`${base}&view=${rankMode === 'top' ? 'sku-ranking' : 'slow-movers'}&limit=${topN}`)
         .then(r => r.json())
         .then(d => setSkuData(Array.isArray(d) ? d : []));
@@ -133,7 +143,7 @@ export default function SalesPage() {
     if (!dateFrom || !dateTo) return;
     setSyncing(true); setSyncResult(null); setError(null);
     try {
-      const res = await fetch(`/api/sales/shopline?from=${dateFrom}&to=${dateTo}`);
+      const res = await fetch(`/api/sales/shopline?from=${dateFrom}&to=${dateTo}&country=${country}`);
       const data = await res.json();
       if (!res.ok) { setError(data.error); return; }
       setSyncResult(`Shopline ${data.saved?.inserted || 0}건 저장 (주문 ${data.totalOrders}건)`);
@@ -142,7 +152,7 @@ export default function SalesPage() {
     finally { setSyncing(false); }
   };
 
-  const formatNT = (n: number) => `NT$${Math.round(n).toLocaleString()}`;
+  const formatCurrency = (n: number) => `${countryInfo.currency}${Math.round(n).toLocaleString()}`;
 
   // KPI 계산
   const totalQty = dailyData.reduce((s, d) => s + d.quantity, 0);
@@ -152,7 +162,7 @@ export default function SalesPage() {
 
   return (
     <div className="max-w-6xl">
-      <h2 className="text-2xl font-bold mb-4">판매 분석</h2>
+      <h2 className="text-2xl font-bold mb-4">{countryInfo.flag} {countryInfo.label} 판매 분석</h2>
 
       {/* 필터바 */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -168,7 +178,7 @@ export default function SalesPage() {
         <select value={channel} onChange={e => setChannel(e.target.value as Channel)}
           className="border rounded px-3 py-1 text-sm bg-white">
           <option value="all">전체 채널</option>
-          <option value="shopee">Shopee</option>
+          {country === 'TW' && <option value="shopee">Shopee</option>}
           <option value="shopline">Shopline</option>
         </select>
 
@@ -180,26 +190,28 @@ export default function SalesPage() {
 
       {/* 데이터 수집 섹션 (접을 수 있음) */}
       {ingestOpen && (
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <Card className={`transition-colors ${shopeeFile ? 'border-green-300 bg-green-50' : 'border-dashed'}`}>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                {shopeeFile ? <CheckCircle className="w-5 h-5 text-green-600" /> : <Upload className="w-5 h-5 text-gray-400" />}
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm">Shopee 주문 파일</p>
-                  <p className="text-xs text-gray-500 truncate">{shopeeFile ? shopeeFile.name : 'Order.all.*.xlsx (암호 자동 복호화)'}</p>
+        <div className={`grid ${country === 'TW' ? 'grid-cols-2' : 'grid-cols-1'} gap-4 mb-4`}>
+          {country === 'TW' && (
+            <Card className={`transition-colors ${shopeeFile ? 'border-green-300 bg-green-50' : 'border-dashed'}`}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  {shopeeFile ? <CheckCircle className="w-5 h-5 text-green-600" /> : <Upload className="w-5 h-5 text-gray-400" />}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm">Shopee 주문 파일</p>
+                    <p className="text-xs text-gray-500 truncate">{shopeeFile ? shopeeFile.name : 'Order.all.*.xlsx (암호 자동 복호화)'}</p>
+                  </div>
+                  <label className="cursor-pointer text-xs text-blue-600 hover:text-blue-800 mr-2">
+                    <input type="file" accept=".xlsx" className="hidden" onChange={e => setShopeeFile(e.target.files?.[0] || null)} />
+                    {shopeeFile ? '변경' : '선택'}
+                  </label>
+                  <Button size="sm" onClick={handleShopeeUpload} disabled={!shopeeFile || uploading} className="bg-orange-500 hover:bg-orange-600 text-xs h-7">
+                    {uploading ? <Loader2 className="w-3 h-3 animate-spin" /> : '업로드'}
+                  </Button>
                 </div>
-                <label className="cursor-pointer text-xs text-blue-600 hover:text-blue-800 mr-2">
-                  <input type="file" accept=".xlsx" className="hidden" onChange={e => setShopeeFile(e.target.files?.[0] || null)} />
-                  {shopeeFile ? '변경' : '선택'}
-                </label>
-                <Button size="sm" onClick={handleShopeeUpload} disabled={!shopeeFile || uploading} className="bg-orange-500 hover:bg-orange-600 text-xs h-7">
-                  {uploading ? <Loader2 className="w-3 h-3 animate-spin" /> : '업로드'}
-                </Button>
-              </div>
-              {uploadResult && <p className="text-xs text-green-600 mt-2">{uploadResult}</p>}
-            </CardContent>
-          </Card>
+                {uploadResult && <p className="text-xs text-green-600 mt-2">{uploadResult}</p>}
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="border-dashed">
             <CardContent className="p-4">
@@ -248,8 +260,8 @@ export default function SalesPage() {
           <div className="grid grid-cols-4 gap-3 mb-4">
             <KpiCard icon={<ShoppingCart className="w-4 h-4 text-blue-600" />} label="주문수" value={`${totalOrders.toLocaleString()}건`} />
             <KpiCard icon={<Package className="w-4 h-4 text-purple-600" />} label="판매 수량" value={`${totalQty.toLocaleString()}개`} />
-            <KpiCard icon={<TrendingUp className="w-4 h-4 text-green-600" />} label="매출" value={formatNT(totalRev)} />
-            <KpiCard icon={<BarChart3 className="w-4 h-4 text-orange-600" />} label="평균 주문단가" value={formatNT(avgOrderValue)} />
+            <KpiCard icon={<TrendingUp className="w-4 h-4 text-green-600" />} label="매출" value={formatCurrency(totalRev)} />
+            <KpiCard icon={<BarChart3 className="w-4 h-4 text-orange-600" />} label="평균 주문단가" value={formatCurrency(avgOrderValue)} />
           </div>
 
           {/* 탭 */}
@@ -269,13 +281,13 @@ export default function SalesPage() {
           </div>
 
           {/* 탭 컨텐츠 */}
-          {tab === 'daily' && <DailyTab data={dailyData} channel={channel} formatNT={formatNT} />}
-          {tab === 'monthly' && <MonthlyTab data={monthlyData} channel={channel} formatNT={formatNT} />}
+          {tab === 'daily' && <DailyTab data={dailyData} channel={channel} formatCurrency={formatCurrency} />}
+          {tab === 'monthly' && <MonthlyTab data={monthlyData} channel={channel} formatCurrency={formatCurrency} />}
           {tab === 'ranking' && (
             <RankingTab data={skuData} topN={topN} setTopN={setTopN}
-              rankMode={rankMode} setRankMode={setRankMode} formatNT={formatNT} />
+              rankMode={rankMode} setRankMode={setRankMode} formatCurrency={formatCurrency} />
           )}
-          {tab === 'compare' && compareData && <CompareTab data={compareData} formatNT={formatNT} />}
+          {tab === 'compare' && compareData && <CompareTab data={compareData} formatCurrency={formatCurrency} />}
         </>
       )}
     </div>
@@ -283,7 +295,7 @@ export default function SalesPage() {
 }
 
 // ── 일별 추이 ──
-function DailyTab({ data, channel, formatNT }: { data: any[]; channel: Channel; formatNT: (n: number) => string }) {
+function DailyTab({ data, channel, formatCurrency }: { data: any[]; channel: Channel; formatCurrency: (n: number) => string }) {
   if (data.length === 0) return <EmptyState />;
 
   return (
@@ -324,7 +336,7 @@ function DailyTab({ data, channel, formatNT }: { data: any[]; channel: Channel; 
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={d => d.slice(5)} />
               <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: any) => formatNT(Number(v))} labelFormatter={d => String(d)} />
+              <Tooltip formatter={(v: any) => formatCurrency(Number(v))} labelFormatter={d => String(d)} />
               <Legend />
               {channel === 'all' ? (
                 <>
@@ -344,7 +356,7 @@ function DailyTab({ data, channel, formatNT }: { data: any[]; channel: Channel; 
 }
 
 // ── 월별 현황 ──
-function MonthlyTab({ data, channel, formatNT }: { data: any[]; channel: Channel; formatNT: (n: number) => string }) {
+function MonthlyTab({ data, channel, formatCurrency }: { data: any[]; channel: Channel; formatCurrency: (n: number) => string }) {
   if (data.length === 0) return <EmptyState />;
 
   // 전월 대비 성장률
@@ -398,7 +410,7 @@ function MonthlyTab({ data, channel, formatNT }: { data: any[]; channel: Channel
                 <tr key={m.month} className="border-b last:border-0">
                   <td className="py-1.5 pr-4 font-medium">{m.month}</td>
                   <td className="py-1.5 pr-4 text-right">{m.quantity.toLocaleString()}개</td>
-                  <td className="py-1.5 pr-4 text-right text-green-600">{formatNT(m.revenue)}</td>
+                  <td className="py-1.5 pr-4 text-right text-green-600">{formatCurrency(m.revenue)}</td>
                   <td className="py-1.5 text-right">
                     {m.growth !== null ? (
                       <span className={`flex items-center justify-end gap-1 ${parseFloat(m.growth) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -418,10 +430,10 @@ function MonthlyTab({ data, channel, formatNT }: { data: any[]; channel: Channel
 }
 
 // ── 상품 랭킹 ──
-function RankingTab({ data, topN, setTopN, rankMode, setRankMode, formatNT }: {
+function RankingTab({ data, topN, setTopN, rankMode, setRankMode, formatCurrency }: {
   data: any[]; topN: number; setTopN: (n: number) => void;
   rankMode: 'top' | 'slow'; setRankMode: (m: 'top' | 'slow') => void;
-  formatNT: (n: number) => string;
+  formatCurrency: (n: number) => string;
 }) {
   return (
     <div className="space-y-4">
@@ -479,7 +491,7 @@ function RankingTab({ data, topN, setTopN, rankMode, setRankMode, formatNT }: {
                         <td className="py-1.5 pr-3 text-right text-orange-600">{s.shopeeQty}</td>
                         <td className="py-1.5 pr-3 text-right text-blue-600">{s.shoplineQty}</td>
                         <td className="py-1.5 pr-3 text-right font-bold">{s.totalQuantity}</td>
-                        <td className="py-1.5 text-right text-green-600">{formatNT(s.totalRevenue)}</td>
+                        <td className="py-1.5 text-right text-green-600">{formatCurrency(s.totalRevenue)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -494,7 +506,7 @@ function RankingTab({ data, topN, setTopN, rankMode, setRankMode, formatNT }: {
 }
 
 // ── 채널 비교 ──
-function CompareTab({ data, formatNT }: { data: any; formatNT: (n: number) => string }) {
+function CompareTab({ data, formatCurrency }: { data: any; formatCurrency: (n: number) => string }) {
   const { shopee, shopline, dailyCompare } = data;
 
   if (!shopee && !shopline) return <EmptyState />;
@@ -508,7 +520,7 @@ function CompareTab({ data, formatNT }: { data: any; formatNT: (n: number) => st
             <div className="grid grid-cols-3 gap-3 text-center">
               <div><p className="text-xl font-bold">{shopee.totalOrders.toLocaleString()}</p><p className="text-xs text-gray-500">주문수</p></div>
               <div><p className="text-xl font-bold">{shopee.totalQuantity.toLocaleString()}</p><p className="text-xs text-gray-500">수량</p></div>
-              <div><p className="text-xl font-bold text-green-600">{formatNT(shopee.totalRevenue)}</p><p className="text-xs text-gray-500">매출</p></div>
+              <div><p className="text-xl font-bold text-green-600">{formatCurrency(shopee.totalRevenue)}</p><p className="text-xs text-gray-500">매출</p></div>
             </div>
           </CardContent>
         </Card>
@@ -518,7 +530,7 @@ function CompareTab({ data, formatNT }: { data: any; formatNT: (n: number) => st
             <div className="grid grid-cols-3 gap-3 text-center">
               <div><p className="text-xl font-bold">{shopline.totalOrders.toLocaleString()}</p><p className="text-xs text-gray-500">주문수</p></div>
               <div><p className="text-xl font-bold">{shopline.totalQuantity.toLocaleString()}</p><p className="text-xs text-gray-500">수량</p></div>
-              <div><p className="text-xl font-bold text-green-600">{formatNT(shopline.totalRevenue)}</p><p className="text-xs text-gray-500">매출</p></div>
+              <div><p className="text-xl font-bold text-green-600">{formatCurrency(shopline.totalRevenue)}</p><p className="text-xs text-gray-500">매출</p></div>
             </div>
           </CardContent>
         </Card>
@@ -551,7 +563,7 @@ function CompareTab({ data, formatNT }: { data: any; formatNT: (n: number) => st
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={d => d.slice(5)} />
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
-                  <Tooltip formatter={(v: any) => formatNT(Number(v))} labelFormatter={d => String(d)} />
+                  <Tooltip formatter={(v: any) => formatCurrency(Number(v))} labelFormatter={d => String(d)} />
                   <Legend />
                   <Line type="monotone" dataKey="shopeeRev" name="Shopee" stroke="#f97316" strokeWidth={2} dot={{ r: 2 }} />
                   <Line type="monotone" dataKey="shoplineRev" name="Shopline" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
